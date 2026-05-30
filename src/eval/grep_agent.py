@@ -2,6 +2,7 @@
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.eval.llm_client import LLMClient
 from src.eval.grep_tools import rg_search, glob_files, read_file
@@ -108,21 +109,29 @@ class GrepAgent:
                     )
 
             if result.tool_calls:
+                # Collect all tool results first, batch into one assistant message
+                tool_results = []
                 for tc in result.tool_calls:
-                    tool_result = self._execute_tool(tc.name, tc.arguments)
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                        }],
+                    tool_results.append((tc, self._execute_tool(tc.name, tc.arguments)))
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": result.content,
+                    "tool_calls": [],
+                }
+                for tc, _ in tool_results:
+                    assistant_msg["tool_calls"].append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
                     })
+                messages.append(assistant_msg)
+
+                for tc, tr in tool_results:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": tool_result,
+                        "content": tr,
                     })
 
         return GrepAgentResult(
@@ -146,8 +155,9 @@ class GrepAgent:
                 return "No files found."
             return "\n".join(results[:30])
         elif name == "read_file":
+            full_path = str(Path(self.codebase_root) / args["file_path"])
             results = read_file(
-                args["file_path"],
+                full_path,
                 args.get("start_line", 0),
                 args.get("end_line", 0),
             )
