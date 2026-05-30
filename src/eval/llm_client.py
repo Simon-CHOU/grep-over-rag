@@ -6,15 +6,10 @@ from openai import OpenAI
 
 
 @dataclass
-class Function:
-    name: str
-    arguments: dict
-
-
-@dataclass
 class ToolCall:
     id: str
-    function: Function
+    name: str
+    arguments: dict
 
 
 @dataclass
@@ -63,10 +58,8 @@ class LLMClient:
                 tool_calls.append(
                     ToolCall(
                         id=tc.id,
-                        function=Function(
-                            name=tc.function.name,
-                            arguments=json.loads(tc.function.arguments),
-                        ),
+                        name=tc.function.name,
+                        arguments=json.loads(tc.function.arguments),
                     )
                 )
 

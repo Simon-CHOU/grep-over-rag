@@ -46,4 +46,4 @@ def test_llm_client_chat_with_tool_calls(mocker):
     )
     client = LLMClient(base_url="http://test", api_key="sk-test")
     result = client.chat([{"role": "user", "content": "find OrderService"}], tools=[])
-    assert result.tool_calls[0].function.name == "search"
+    assert result.tool_calls[0].name == "search"
