@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import sys
@@ -26,6 +27,39 @@ from typing import Any
 
 import numpy as np
 from scipy.stats import chi2 as chi2_dist, fisher_exact
+
+
+# ---------------------------------------------------------------------------
+# Result container
+# ---------------------------------------------------------------------------
+
+class ComparisonStats:
+    """Container for comparison statistics between grep and rag modes.
+
+    Attributes:
+        num_runs: Number of runs per task.
+        num_tasks: Number of tasks compared.
+        mcnemar: McNemar test results dict.
+        bootstrap_ci: Bootstrap CI results dict.
+        per_difficulty_fisher: Per-difficulty Fisher exact test results.
+        failure_patterns: Failure pattern distributions.
+    """
+
+    def __init__(
+        self,
+        num_runs: int,
+        num_tasks: int,
+        mcnemar: dict,
+        bootstrap_ci: dict,
+        per_difficulty_fisher: dict,
+        failure_patterns: dict,
+    ):
+        self.num_runs = num_runs
+        self.num_tasks = num_tasks
+        self.mcnemar = mcnemar
+        self.bootstrap_ci = bootstrap_ci
+        self.per_difficulty_fisher = per_difficulty_fisher
+        self.failure_patterns = failure_patterns
 
 
 # ---------------------------------------------------------------------------
@@ -271,11 +305,16 @@ def main() -> None:
 
         uv run python -m src.eval.stats results/
     """
-    if len(sys.argv) < 2:
-        print("Usage: uv run python -m src.eval.stats <results_dir>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Statistical tests on agent eval aggregate CSVs"
+    )
+    parser.add_argument(
+        "results_dir",
+        help="Directory containing grep/rag aggregate and raw CSVs",
+    )
+    args = parser.parse_args()
 
-    results_dir = Path(sys.argv[1])
+    results_dir = Path(args.results_dir)
     if not results_dir.is_dir():
         print(f"Error: not a directory: {results_dir}", file=sys.stderr)
         sys.exit(1)
