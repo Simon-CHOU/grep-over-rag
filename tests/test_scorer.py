@@ -54,3 +54,14 @@ def test_both_wrong():
         expected_file="foo/Bar.java",
         expected_line=42
     ) is False
+
+
+from src.eval.scorer import has_valid_result
+
+
+def test_has_valid_result_true():
+    assert has_valid_result("Foo.java", 42) is True
+
+
+def test_has_valid_result_false():
+    assert has_valid_result("", 0) is False
