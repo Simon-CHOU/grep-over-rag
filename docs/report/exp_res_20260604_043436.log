@@ -230,6 +230,109 @@ This hybrid approach could potentially achieve >85% success rate and
 represents the natural next step for this research.
 
 ================================================================================
+9. EXPERIMENT SCOPE AND LIMITATIONS
+================================================================================
+
+This experiment was originally motivated by the question: "Why does Claude
+Code use Grep rather than RAG for code search?" The results show RAG
+outperforming Grep on our benchmark. This section clarifies what the
+experiment actually measured, what it did not measure, and what the
+results mean in the broader context of code search tool design.
+
+9.1 What We Tested
+----------------------------------------------------------------------
+  - Task: Symbol definition localization (find the exact file:line of a
+    class/method/enum/interface definition)
+  - Codebase: Fixed snapshot of Apollo (510 Java files, 7 modules)
+  - Condition: Pre-built vector index, no code changes during evaluation
+  - Metric: Precision (file + line ±3)
+  - Constraint: 4-step budget per task
+
+  Under these specific conditions, RAG achieved 78% vs Grep's 68%.
+
+9.2 What We Did NOT Test
+----------------------------------------------------------------------
+  The following dimensions were not part of this experiment but are
+  critical to understanding why production tools like Claude Code prefer
+  Grep:
+
+  a) Index Build Cost
+     Building the RAG index required:
+     - 3916 embedding API calls (DashScope text-embedding-v4)
+     - ~5 minutes of wall-clock time
+     - Monetary cost for embedding API usage
+     Grep requires zero setup — ripgrep is a single binary.
+
+  b) Index Freshness / Code Mutation
+     Real codebases change constantly. After a file is modified:
+     - Grep sees the change immediately
+     - RAG's index is stale until rebuilt (partial or full)
+     In a rapidly-changing codebase, RAG's accuracy degrades unless
+     the index is continuously updated — adding ongoing cost and
+     complexity.
+
+  c) General Search Scenarios
+     Our benchmark only tests symbol definition localization. Real
+     code search includes:
+     - Exact text search (error codes, TODO comments, variable names)
+     - Call-site discovery ("who calls this method?")
+     - Pattern matching ("all uses of deprecated API X")
+     - Cross-file refactoring searches
+     Grep excels at all of these. RAG's semantic similarity may not
+     be the right tool for exact/pattern-based searches.
+
+  d) Codebase Scale
+     Apollo has 510 Java files. Production codebases have tens of
+     thousands. At that scale:
+     - Index build time/cost grows linearly
+     - Vector search latency may increase
+     - Index maintenance becomes a non-trivial engineering problem
+     Grep scales naturally — ripgrep is designed for millions of files.
+
+  e) End-to-End Task Completion
+     We measured search precision, not whether the agent ultimately
+     answered the user's question correctly. In Claude Code's
+     architecture, search is just the first step — the LLM then reads
+     and reasons about the code. A slightly less precise search tool
+     may still lead to correct answers if the LLM can self-correct.
+
+9.3 What This Means
+----------------------------------------------------------------------
+  The experiment answers a specific question:
+
+    "For symbol definition localization on a fixed, small codebase with
+     pre-built index, which retrieval method is more accurate?"
+
+    Answer: RAG (78% vs 68%).
+
+  It does NOT answer:
+
+    "Which retrieval method is better for a production code search tool?"
+
+  The reason Claude Code uses Grep is likely not about raw search
+  accuracy on a narrow benchmark. It is about the total engineering
+  tradeoff:
+
+    Grep advantages (not measured here):
+    ✓ Zero infrastructure — no index, no embedding model, no vector DB
+    ✓ Always fresh — sees code changes instantly
+    ✓ General purpose — handles exact text, patterns, regex, not just
+      symbol definitions
+    ✓ Predictable cost — single binary, no API calls, no tokens
+    ✓ Scales trivially — ripgrep handles millions of files
+
+    RAG advantages (measured here):
+    ✓ Better at disambiguating ambiguous symbol names (+39% on methods)
+    ✓ Semantic understanding — finds related code, not just exact matches
+    ✓ Cross-language potential — embeddings can bridge naming conventions
+
+  The honest conclusion is: RAG is more accurate for this specific task,
+  but Grep's engineering advantages (zero cost, real-time freshness,
+  generality) make it the pragmatic choice for a general-purpose code
+  search tool. The two are not in direct competition — they solve
+  different problems.
+
+================================================================================
 Appendix A: Grep vs RAG — Full Task Comparison
 ================================================================================
 
