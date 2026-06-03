@@ -1,0 +1,310 @@
+================================================================================
+              Grep vs RAG — Comparative Experiment Report
+              Apollo Codebase Symbol Localization Eval
+================================================================================
+Date:       2026-06-04 04:34
+Model:      deepseek-v4-flash (both agents)
+Embedding:  DashScope text-embedding-v4 (RAG only)
+Codebase:   Apollo Config Center (510 Java source files, 7 modules)
+Tasks:      50 (20 easy, 15 medium, 10 hard, 5 edge)
+Runs/Task:  1
+Max Steps:  4
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+  Grep Agent:  34/50  (68.0%)
+  RAG Agent:   39/50  (78.0%)
+  Delta:       +10.0 percentage points in favor of RAG
+
+  RAG outperforms Grep by 10 points overall. The advantage is concentrated
+  on medium-difficulty tasks (ambiguous method names), where RAG achieves
+  80% vs Grep's 33.3%. However, Grep is perfect on easy tasks (100% vs
+  RAG's 95%) where symbol names are globally unique.
+
+  Head-to-head:
+    Both pass:     28 tasks
+    RAG only:      11 tasks  (RAG solves what Grep cannot)
+    Grep only:      6 tasks  (Grep solves what RAG cannot)
+    Both fail:      5 tasks
+
+================================================================================
+2. OVERALL RESULTS
+================================================================================
+
+  Metric              Grep          RAG           Delta
+  ----------------    ----------    ----------    ----------
+  Success Rate        68.0%         78.0%         +10.0%
+  Avg Steps           2.9           3.3           +0.4
+  Avg Latency         5,120ms       5,049ms       -71ms
+  Pass Avg Latency    4,620ms       4,769ms       +149ms
+  Fail Avg Latency    6,181ms       5,734ms       -447ms
+
+================================================================================
+3. RESULTS BY DIFFICULTY
+================================================================================
+
+  Difficulty   Grep        RAG         Delta     Winner
+  ----------   --------    --------    ------    ------
+  easy         20/20       19/20       -5.0%     Grep
+               100.0%      95.0%
+
+  medium        5/15       12/15       +46.7%    RAG
+               33.3%       80.0%
+
+  hard          5/10        5/10        0.0%     Tie
+               50.0%       50.0%
+
+  edge          4/5         3/5        -20.0%    Grep
+               80.0%       60.0%
+
+  Key Findings:
+  - Easy: Grep is perfect (unique names → single rg hit). RAG loses 1
+    task to wrong_line (KubernetesDiscoveryService: predicted line 47
+    vs expected 42, delta 5).
+  - Medium: RAG dominates (+46.7%). This is the ambiguous method-name
+    category where Grep struggles most (save, delete, findOne across
+    modules). RAG's semantic search finds the right file/method more
+    reliably.
+  - Hard: Tie at 50%. Both agents handle inner classes/enums but
+    struggle with overloaded methods in the same class.
+  - Edge: Grep slightly ahead. RAG loses on annotation types (@interface)
+    where embedding semantics differ from exact text matching.
+
+================================================================================
+4. RESULTS BY SYMBOL TYPE
+================================================================================
+
+  Type         Grep        RAG         Delta     Winner
+  ----------   --------    --------    ------    ------
+  class        21/21       19/21       -9.5%     Grep
+               100.0%      90.5%
+
+  method        7/23       16/23       +39.1%    RAG
+               30.4%       69.6%
+
+  enum          4/4         3/4        -25.0%    Grep
+               100.0%      75.0%
+
+  interface     2/2         1/2        -50.0%    Grep
+               100.0%      50.0%
+
+  Key Finding:
+  - Method search is where RAG shines: 69.6% vs Grep's 30.4% (+39.1%)
+  - Grep is perfect on class/enum/interface (unique names) but RAG
+    drops some due to semantic similarity confusion
+  - RAG's method advantage comes from symbol-level chunking: the
+    embedding captures method signatures + surrounding context
+
+================================================================================
+5. ERROR BREAKDOWN
+================================================================================
+
+  Grep Errors (16 total):
+    empty_result:    5  (31.3%)  — step exhaustion
+    wrong_line:      5  (31.3%)  — correct file, wrong overload
+    api_error:       4  (25.0%)  — DeepSeek API transient errors
+    wrong_file:      2  (12.5%)  — biz vs portal module confusion
+
+  RAG Errors (11 total):
+    empty_result:    7  (63.6%)  — step exhaustion / no convergence
+    wrong_line:      4  (36.4%)  — correct file, off by >3 lines
+    api_error:       0  ( 0.0%)  — no API errors!
+    wrong_file:      0  ( 0.0%)  — no wrong file errors!
+
+  Key Finding:
+  - RAG eliminates wrong_file errors entirely — semantic search
+    correctly identifies the right file even for duplicate class names
+  - RAG eliminates api_error — possibly due to fewer LLM round trips
+    (vector search provides better first-pass context)
+  - RAG's remaining failures are all empty_result (7) and wrong_line (4)
+
+================================================================================
+6. HEAD-TO-HEAD ANALYSIS
+================================================================================
+
+6.1 Tasks RAG solves that Grep cannot (11 tasks):
+----------------------------------------------------------------------
+  task_022  ItemService.save              medium  grep=empty  rag=correct
+  task_023  AppService.findOne            medium  grep=wrong_line  rag=correct
+  task_024  ClusterService.delete         medium  grep=wrong_line  rag=correct
+  task_026  AppService.findAll            medium  grep=api_error  rag=correct
+  task_027  NamespaceService.deleteNamespace medium grep=wrong_file  rag=correct
+  task_028  ReleaseService.rollback       medium  grep=wrong_file  rag=correct
+  task_030  InstanceService.getByNamespace medium  grep=empty  rag=correct
+  task_032  NamespaceController.delete     medium  grep=empty  rag=correct
+  task_044  ReleaseService.publish        hard    grep=empty  rag=correct
+  task_045  ItemController.get            hard    grep=api_error  rag=correct
+  task_050  ReleaseMessageListener.handleMessage edge grep=api_error rag=correct
+
+  Pattern: 8/11 are medium tasks. RAG excels at:
+  - Ambiguous method names across modules (save, delete, findOne)
+  - Resolving biz vs portal module confusion
+  - Recovering from Grep's API errors
+
+6.2 Tasks Grep solves that RAG cannot (6 tasks):
+----------------------------------------------------------------------
+  task_005  KubernetesDiscoveryService    easy    rag=wrong_line
+  task_035  ApolloAuditLogService.save    medium  rag=empty_result
+  task_036  NamespaceService.findChildNamespace hard rag=wrong_line
+  task_041  AdminServiceAPI.ItemAPI       hard    rag=empty_result
+  task_046  ChangeType                    edge    rag=wrong_line
+  task_049  ApolloAuditLog                edge    rag=empty_result
+
+  Pattern: RAG struggles with:
+  - Unique class names where exact text match is superior (easy/edge)
+  - Inner classes (AdminServiceAPI.ItemAPI) — embedding may not
+    distinguish inner class semantics well
+  - Annotation types (@interface ApolloAuditLog)
+
+6.3 Both fail (5 tasks):
+----------------------------------------------------------------------
+  task_025  ReleaseService.publish        medium  both=empty/api
+  task_033  ConfigController.queryConfig  medium  both=wrong_line/empty
+  task_037  NamespaceService.isChildNamespace hard both=wrong_line/empty
+  task_038  NamespaceService.findParentNamespace hard both=empty/wrong_line
+  task_043  PermissionController.hasPermission hard both=wrong_line/empty
+
+  Pattern: These are all hard method disambiguation tasks — overloaded
+  methods within the same class. Neither agent can reliably distinguish
+  between overloads with the same name in the same file.
+
+================================================================================
+7. KEY INSIGHTS
+================================================================================
+
+7.1 RAG's Advantage: Semantic Disambiguation
+  The embedding captures not just the symbol name but the surrounding
+  code context. When searching for "NamespaceService.deleteNamespace",
+  the embedding of the query is closer to the portal module version
+  (which deals with namespace deletion logic) than the biz module
+  version. This gives RAG a structural advantage that grep (pure text
+  matching) cannot achieve.
+
+7.2 Grep's Advantage: Precision on Unique Names
+  When a symbol name is globally unique (e.g., "ApolloEurekaClientConfig"),
+  grep finds it in one step with zero ambiguity. RAG's semantic search
+  can return similar-but-wrong results, leading to occasional wrong_line
+  errors on tasks that Grep solves trivially.
+
+7.3 The Shared Bottleneck: Method Overloads
+  Both agents fail on overloaded methods within the same class
+  (e.g., NamespaceService.isChildNamespace at line 280 vs 284).
+  This is a fundamental limitation of the current 4-step constraint
+  — resolving overloads requires reading and understanding method
+  signatures, which consumes steps.
+
+7.4 Infrastructure Quality Matters
+  Grep had 4 API errors (8% of tasks) while RAG had 0. This may be
+  because RAG's vector search provides better first-pass context,
+  reducing the number of LLM round trips and thus API error exposure.
+  However, this could also be random variation in a single run.
+
+7.5 Difficulty Anomaly Explained
+  In the Grep-only experiment, hard tasks (50%) outperformed medium
+  tasks (33.3%). With RAG, this anomaly disappears:
+  - Medium jumps from 33.3% → 80.0% (RAG fixes ambiguous names)
+  - Hard stays at 50% (overload disambiguation remains unsolved)
+  This confirms that medium tasks were the Grep-specific weakness,
+  not an inherent difficulty ordering.
+
+================================================================================
+8. CONCLUSION
+================================================================================
+
+RAG outperforms Grep by 10 percentage points (78% vs 68%) on the Apollo
+codebase symbol localization benchmark. The advantage is concentrated on
+method search (+39.1%) where semantic disambiguation resolves the
+ambiguous-name problem that plagues text-based grep.
+
+However, Grep remains superior on unique-name symbols (class/enum/
+interface) where exact text matching is faster and more precise.
+
+The ideal agent would combine both approaches:
+  1. Try grep first for exact-name matches (fast, precise)
+  2. Fall back to vector search when grep returns too many hits
+    (semantic disambiguation)
+
+This hybrid approach could potentially achieve >85% success rate and
+represents the natural next step for this research.
+
+================================================================================
+Appendix A: Grep vs RAG — Full Task Comparison
+================================================================================
+
+task_id   diff   symbol                              grep   rag    grep_err          rag_err
+--------  -----  ----------------------------------  -----  -----  ----------------  ----------------
+task_001  easy   ApolloEurekaClientConfig            PASS   PASS   correct           correct
+task_002  easy   GrayReleaseRuleCache                PASS   PASS   correct           correct
+task_003  easy   ConfigFileController                PASS   PASS   correct           correct
+task_004  easy   DeferredResultWrapper               PASS   PASS   correct           correct
+task_005  easy   KubernetesDiscoveryService          PASS   FAIL   correct           wrong_line
+task_006  easy   NamespaceAcquireLockAspect           PASS   PASS   correct           correct
+task_007  easy   NamespaceUnlockAspect               PASS   PASS   correct           correct
+task_008  easy   AdminServiceHealthIndicator         PASS   PASS   correct           correct
+task_009  easy   ConsumerAuthenticationFilter        PASS   PASS   correct           correct
+task_010  easy   AdminServiceAddressLocator          PASS   PASS   correct           correct
+task_011  easy   GlobalDefaultExceptionHandler       PASS   PASS   correct           correct
+task_012  easy   CharacterEncodingFilterConfiguration PASS  PASS   correct           correct
+task_013  easy   RepositoryAspect                    PASS   PASS   correct           correct
+task_014  easy   SqlFunctionsMetadataBuilderContributor PASS PASS  correct           correct
+task_015  easy   ApolloAuditLogApiJpaImpl            PASS   PASS   correct           correct
+task_016  easy   ApolloAuditController               PASS   PASS   correct           correct
+task_017  easy   ApolloApplication                   PASS   PASS   correct           correct
+task_018  easy   ApolloBizConfig                     PASS   PASS   correct           correct
+task_019  easy   ConfigPublishListener               PASS   PASS   correct           correct
+task_020  easy   ReleaseMessageScanner               PASS   PASS   correct           correct
+task_021  medium ReleaseService.findOne              PASS   PASS   correct           correct
+task_022  medium ItemService.save                    FAIL   PASS   empty_result      correct
+task_023  medium AppService.findOne                  FAIL   PASS   wrong_line        correct
+task_024  medium ClusterService.delete               FAIL   PASS   wrong_line        correct
+task_025  medium ReleaseService.publish              FAIL   FAIL   api_error         empty_result
+task_026  medium AppService.findAll                  FAIL   PASS   api_error         correct
+task_027  medium NamespaceService.deleteNamespace    FAIL   PASS   wrong_file        correct
+task_028  medium ReleaseService.rollback             FAIL   PASS   wrong_file        correct
+task_029  medium ClusterService.deleteCluster        PASS   PASS   correct           correct
+task_030  medium InstanceService.getByNamespace      FAIL   PASS   empty_result      correct
+task_031  medium AppController.delete                PASS   PASS   correct           correct
+task_032  medium NamespaceController.delete          FAIL   PASS   empty_result      correct
+task_033  medium ConfigController.queryConfig        FAIL   FAIL   wrong_line        empty_result
+task_034  medium InputValidator.isValidClusterNamespace PASS PASS  correct           correct
+task_035  medium ApolloAuditLogService.save          PASS   FAIL   correct           empty_result
+task_036  hard   NamespaceService.findChildNamespace PASS   FAIL   correct           wrong_line
+task_037  hard   NamespaceService.isChildNamespace   FAIL   FAIL   wrong_line        empty_result
+task_038  hard   NamespaceService.findParentNamespace FAIL  FAIL   empty_result      wrong_line
+task_039  hard   ConfigFileController.ConfigFileOutputFormat PASS PASS correct       correct
+task_040  hard   ReleaseController.PublishEventType  PASS   PASS   correct           correct
+task_041  hard   AdminServiceAPI.ItemAPI             PASS   FAIL   correct           empty_result
+task_042  hard   ReleaseService.rollbackTo           PASS   PASS   correct           correct
+task_043  hard   PermissionController.hasPermission  FAIL   FAIL   wrong_line        empty_result
+task_044  hard   ReleaseService.publish              FAIL   PASS   empty_result      correct
+task_045  hard   ItemController.get                  FAIL   PASS   api_error         correct
+task_046  edge   ChangeType                          PASS   FAIL   correct           wrong_line
+task_047  edge   OpType                              PASS   PASS   correct           correct
+task_048  edge   PreAcquireNamespaceLock             PASS   PASS   correct           correct
+task_049  edge   ApolloAuditLog                      PASS   FAIL   correct           empty_result
+task_050  edge   ReleaseMessageListener.handleMessage FAIL  PASS   api_error         correct
+
+================================================================================
+Appendix B: Experiment Infrastructure
+================================================================================
+
+  Code Changes (Tasks 1-5):
+    - src/eval/chunker.py (NEW) — Symbol-level Java chunker (3916 chunks)
+    - src/eval/embedder.py (MOD) — Added DashScopeEmbedder
+    - src/eval/indexer.py (MOD) — Integrated chunker + new metadata
+    - src/eval/rag_agent.py (MOD) — Fixed _parse_answer
+    - src/eval/runner.py (MOD) — Switched to DashScopeEmbedder
+    - tests/ (MOD) — 96 tests passing
+
+  Commits:
+    d5dc5c9 feat: add chunker dataclass, comment stripper, and brace matcher
+    5b0eea5 feat: add chunk_file function for symbol-level Java parsing
+    4140163 feat: add DashScopeEmbedder for text-embedding-v4
+    6c9e09c feat: integrate symbol-level chunker into indexer
+    ef6c052 fix: strip markdown artifacts in RAG agent parser, switch to DashScopeEmbedder
+
+================================================================================
+End of Report
+================================================================================
