@@ -52,3 +52,36 @@ def test_rag_agent_direct_answer():
     result = agent.run(symbol="NamespaceService.findNamespace", symbol_type="method")
     assert result.line_number == 87
     assert result.steps == 1
+
+
+def test_rag_agent_strips_markdown_backticks():
+    llm = make_mock_llm([
+        ChatResult(content="`apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseService.java:98`"),
+    ])
+    agent = RAGAgent(llm_client=llm, codebase_root="/tmp",
+                     index_store=FakeIndexStore(), embedder=FakeEmbedder())
+    result = agent.run(symbol="ReleaseService.findOne", symbol_type="method")
+    assert result.file_path == "apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseService.java"
+    assert result.line_number == 98
+
+
+def test_rag_agent_strips_bold_markdown():
+    llm = make_mock_llm([
+        ChatResult(content="**apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseService.java:195**"),
+    ])
+    agent = RAGAgent(llm_client=llm, codebase_root="/tmp",
+                     index_store=FakeIndexStore(), embedder=FakeEmbedder())
+    result = agent.run(symbol="ReleaseService.publish", symbol_type="method")
+    assert result.file_path == "apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseService.java"
+    assert result.line_number == 195
+
+
+def test_rag_agent_strips_answer_prefix():
+    llm = make_mock_llm([
+        ChatResult(content="**Answer:** `apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/NamespaceService.java:168`"),
+    ])
+    agent = RAGAgent(llm_client=llm, codebase_root="/tmp",
+                     index_store=FakeIndexStore(), embedder=FakeEmbedder())
+    result = agent.run(symbol="NamespaceService.deleteNamespace", symbol_type="method")
+    assert result.file_path == "apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/NamespaceService.java"
+    assert result.line_number == 168

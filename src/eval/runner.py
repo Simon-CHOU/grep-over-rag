@@ -178,7 +178,7 @@ def main():
     from src.eval.grep_agent import GrepAgent
     from src.eval.rag_agent import RAGAgent
     from src.eval.indexer import IndexStore
-    from src.eval.embedder import DeepSeekEmbedder
+    from src.eval.embedder import DashScopeEmbedder
 
     parser = argparse.ArgumentParser(description="Agent Eval: Grep vs RAG")
     parser.add_argument("--mode", choices=["grep", "rag"], required=True)
@@ -193,7 +193,7 @@ def main():
         agent_factory = lambda: GrepAgent(codebase_root=args.codebase)
     else:
         store = IndexStore(args.index_dir)
-        embedder = DeepSeekEmbedder()
+        embedder = DashScopeEmbedder()
         agent_factory = lambda: RAGAgent(
             codebase_root=args.codebase,
             index_store=store,
