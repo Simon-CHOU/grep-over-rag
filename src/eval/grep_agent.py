@@ -165,7 +165,14 @@ class GrepAgent:
         return f"Unknown tool: {name}"
 
     def _parse_answer(self, text: str) -> tuple[str, int] | None:
-        match = re.search(r"(.+?):(\d+)", text)
+        # Try strict path:line pattern first (Java source file)
+        match = re.search(r"([\w\-./]+\.java):(\d+)", text)
         if match:
-            return (match.group(1).strip(), int(match.group(2)))
+            path = match.group(1).strip().strip("`*'\"")
+            return (path, int(match.group(2)))
+        # Fallback: any path-like:line
+        match = re.search(r"([\w\-./]+):(\d+)", text)
+        if match:
+            path = match.group(1).strip().strip("`*'\"")
+            return (path, int(match.group(2)))
         return None
