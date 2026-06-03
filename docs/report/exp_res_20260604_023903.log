@@ -1,0 +1,292 @@
+================================================================================
+                    Grep Agent Experiment Report
+                    Grep vs RAG - Apollo Codebase Eval
+================================================================================
+Date:       2026-06-04 02:39
+Model:      deepseek-v4-flash
+Codebase:   Apollo Config Center (510 Java source files, 7 modules)
+Tasks:      50 (20 easy, 15 medium, 10 hard, 5 edge)
+Runs/Task:  1
+Max Steps:  4
+
+================================================================================
+1. OVERALL RESULTS
+================================================================================
+
+  Total Tasks:     50
+  Success:         34  (68.0%)
+  Failed:          16  (32.0%)
+
+  Avg Steps:       2.9
+  Avg Latency:     5,120 ms
+
+  Success Latency: 4,620 ms (avg)
+  Failure Latency: 6,181 ms (avg)
+
+--------------------------------------------------------------------------------
+Latency Percentiles
+--------------------------------------------------------------------------------
+  Min:   1,331 ms
+  P25:   3,673 ms
+  P50:   4,261 ms
+  P75:   6,948 ms
+  P90:   7,994 ms
+  Max:  10,287 ms
+
+================================================================================
+2. RESULTS BY DIFFICULTY
+================================================================================
+
+  Difficulty   Pass/Total   Rate     Avg Steps   Avg Latency
+  ----------   ----------   ------   ---------   -----------
+  easy          20 / 20     100.0%     2.9        3,857 ms
+  medium         5 / 15      33.3%     3.2        6,178 ms
+  hard           5 / 10      50.0%     2.9        6,300 ms
+  edge           4 /  5      80.0%     2.4        4,634 ms
+
+  Key Finding:
+  - Easy tasks achieve 100% success (unique class names, single rg hit)
+  - Medium tasks drop sharply to 33.3% (ambiguous method names across modules)
+  - Hard tasks recover to 50% (inner classes/enums handled well, overloads fail)
+  - Edge tasks at 80% (annotation types and enums work; API errors hurt)
+
+================================================================================
+3. RESULTS BY SYMBOL TYPE
+================================================================================
+
+  Symbol Type   Pass/Total   Rate
+  -----------   ----------   ------
+  class          21 / 21     100.0%
+  method          7 / 23      30.4%
+  enum            4 /  4     100.0%
+  interface       2 /  2     100.0%
+
+  Key Finding:
+  - Class/enum/interface searches are trivially solved (unique names + rg)
+  - Method search is the dominant failure mode (30.4%) due to:
+    (a) Ambiguous names (e.g., "save", "delete", "findOne") across modules
+    (b) Overloaded methods within the same class
+    (c) portal vs biz module confusion
+
+================================================================================
+4. ERROR BREAKDOWN
+================================================================================
+
+  Error Type      Count   Description
+  ------------    -----   -----------
+  empty_result      5     Agent exhausted steps without producing an answer
+  wrong_line        5     Correct file, but line off by > 3
+  api_error         4     LLM API returned error (no prediction)
+  wrong_file        2     Agent picked wrong file entirely
+
+  Total Errors: 16
+
+  Error Rate by Type:
+    empty_result   31.3%  (5/16)
+    wrong_line     31.3%  (5/16)
+    api_error      25.0%  (4/16)
+    wrong_file     12.5%  (2/16)
+
+================================================================================
+5. STEP DISTRIBUTION
+================================================================================
+
+  Steps   Tasks   Notes
+  -----   -----   -----
+    0       4     API errors (no interaction occurred)
+    2       4     Quick hits (unique symbols, 1 rg + answer)
+    3      29     Standard flow (rg + read + answer)
+    4      13     Max steps (complex search or empty_result)
+
+  Observations:
+  - 58% of tasks complete in exactly 3 steps (the expected norm)
+  - 4 tasks (8%) hit API errors before any tool call
+  - 26% of tasks required all 4 steps (mostly medium/hard)
+
+================================================================================
+6. DETAILED FAILURE ANALYSIS
+================================================================================
+
+6.1 empty_result (5 failures)
+----------------------------------------------------------------------
+  These tasks exhausted all 4 steps without the LLM producing a final answer.
+
+  task_022  ItemService.save              medium   7,535ms  4 steps
+  task_030  InstanceService.getByNamespace medium  6,947ms  4 steps
+  task_032  NamespaceController.delete     medium  7,195ms  4 steps
+  task_038  NamespaceService.findParentNamespace hard 7,572ms 4 steps
+  task_044  ReleaseService.publish         hard    8,615ms  4 steps
+
+  Root Cause: Agent spent all steps searching/reading but never converged
+  on a final answer. Likely cause: too many rg hits, agent kept reading
+  files trying to disambiguate but ran out of steps.
+
+6.2 wrong_line (5 failures)
+----------------------------------------------------------------------
+  Correct file identified, but line number off by more than 3.
+
+  task_023  AppService.findOne             medium  expected=73  predicted=53  delta=20
+  task_024  ClusterService.delete          medium  expected=105 predicted=88  delta=17
+  task_033  ConfigController.queryConfig   medium  expected=95  predicted=79  delta=16
+  task_037  NamespaceService.isChildNamespace hard expected=280 predicted=284 delta=4
+  task_043  PermissionController.hasPermission hard expected=93 predicted=76  delta=17
+
+  Root Cause:
+  - task_037: Off by only 4 lines (one overload away) -- borderline miss
+  - Others: Agent picked a different method in the same class, or miscounted
+    lines after reading a partial file range.
+
+6.3 api_error (4 failures)
+----------------------------------------------------------------------
+  LLM API returned an error; no prediction was made.
+
+  task_025  ReleaseService.publish         medium   3,513ms
+  task_026  AppService.findAll             medium   2,924ms
+  task_045  ItemController.get             hard     7,177ms
+  task_050  ReleaseMessageListener.handleMessage edge 1,331ms
+
+  Root Cause: deepseek-v4-flash API intermittent errors (rate limiting,
+  timeouts, or transient failures). These are infrastructure issues,
+  not agent logic failures. Retrying would likely resolve most.
+
+6.4 wrong_file (2 failures)
+----------------------------------------------------------------------
+  Agent identified the wrong file entirely.
+
+  task_027  NamespaceService.deleteNamespace
+            Expected: apollo-portal/.../NamespaceService.java
+            Predicted: apollo-biz/.../NamespaceService.java
+
+  task_028  ReleaseService.rollback
+            Expected: apollo-portal/.../ReleaseService.java
+            Predicted: apollo-biz/.../ReleaseService.java
+
+  Root Cause: Both failures involve the same pattern -- the agent found
+  a class with the same name in the biz module instead of the portal
+  module. The portal module duplicates several service class names
+  (NamespaceService, ReleaseService, AppService), and the agent
+  defaulted to the first rg hit (alphabetically, biz comes before portal).
+
+================================================================================
+7. KEY INSIGHTS
+================================================================================
+
+7.1 Grep Agent Strengths
+  - Perfect (100%) on class, enum, and interface searches
+  - Fast median latency (4.3s) for successful tasks
+  - Efficient step usage: most tasks complete in 3 steps
+  - Handles inner classes/enums well (AdminServiceAPI.ItemAPI, etc.)
+
+7.2 Grep Agent Weaknesses
+  - Method disambiguation is the primary failure mode
+  - Cannot distinguish between identically-named classes in different
+    modules (biz vs portal)
+  - Step limit (4) is tight for ambiguous method searches
+  - No module-awareness: treats all rg results equally regardless of
+    which module they belong to
+
+7.3 Difficulty Anomaly
+  - Hard tasks (50%) outperform medium tasks (33.3%)
+  - Explanation: Hard tasks include inner classes/enums (unique names),
+    while medium tasks specifically target ambiguous method names across
+    modules -- the Grep Agent's weakest capability
+
+7.4 Infrastructure Impact
+  - 4 API errors (8%) account for 25% of all failures
+  - Excluding API errors: 34/(50-4) = 73.9% effective success rate
+  - Excluding API errors + empty_result: agent logic failures = 12/46 = 73.9%
+
+================================================================================
+8. CONCLUSION
+================================================================================
+
+The Grep Agent achieves 68.0% overall success rate on the Apollo codebase
+symbol localization benchmark, with perfect performance on unique-name
+symbols (class/enum/interface) but significant challenges on ambiguous
+method-name resolution across modules.
+
+Primary bottleneck: the agent lacks module-level awareness when multiple
+classes share the same name across different Apollo modules (biz, portal,
+adminservice, configservice). This is an inherent limitation of text-based
+grep search without structural code understanding.
+
+Secondary bottleneck: API reliability (4 transient errors) accounts for
+a disproportionate share of failures.
+
+================================================================================
+Appendix A: Raw Results (All 50 Tasks)
+================================================================================
+
+task_id   difficulty  symbol                              success  error_type     steps  latency
+--------  ----------  ----------------------------------  -------  -------------  -----  -------
+task_001  easy        ApolloEurekaClientConfig            PASS     correct          3     6948ms
+task_002  easy        GrayReleaseRuleCache                PASS     correct          3     4145ms
+task_003  easy        ConfigFileController                PASS     correct          3     3898ms
+task_004  easy        DeferredResultWrapper               PASS     correct          3     3208ms
+task_005  easy        KubernetesDiscoveryService          PASS     correct          4     4887ms
+task_006  easy        NamespaceAcquireLockAspect           PASS     correct          3     3990ms
+task_007  easy        NamespaceUnlockAspect               PASS     correct          3     4109ms
+task_008  easy        AdminServiceHealthIndicator         PASS     correct          3     3655ms
+task_009  easy        ConsumerAuthenticationFilter        PASS     correct          3     3203ms
+task_010  easy        AdminServiceAddressLocator          PASS     correct          3     4261ms
+task_011  easy        GlobalDefaultExceptionHandler       PASS     correct          3     3925ms
+task_012  easy        CharacterEncodingFilterConfiguration PASS    correct          2     2962ms
+task_013  easy        RepositoryAspect                    PASS     correct          2     2637ms
+task_014  easy        SqlFunctionsMetadataBuilderContributor PASS   correct          2     2559ms
+task_015  easy        ApolloAuditLogApiJpaImpl            PASS     correct          3     3871ms
+task_016  easy        ApolloAuditController               PASS     correct          3     3711ms
+task_017  easy        ApolloApplication                   PASS     correct          3     3673ms
+task_018  easy        ApolloBizConfig                     PASS     correct          3     3551ms
+task_019  easy        ConfigPublishListener               PASS     correct          3     4195ms
+task_020  easy        ReleaseMessageScanner               PASS     correct          3     3752ms
+task_021  medium      ReleaseService.findOne              PASS     correct          4     8179ms
+task_022  medium      ItemService.save                    FAIL     empty_result     4     7535ms
+task_023  medium      AppService.findOne                  FAIL     wrong_line       3     5765ms
+task_024  medium      ClusterService.delete               FAIL     wrong_line       4     7994ms
+task_025  medium      ReleaseService.publish              FAIL     api_error        0     3513ms
+task_026  medium      AppService.findAll                  FAIL     api_error        0     2924ms
+task_027  medium      NamespaceService.deleteNamespace    FAIL     wrong_file       3     6958ms
+task_028  medium      ReleaseService.rollback             FAIL     wrong_file       4     5691ms
+task_029  medium      ClusterService.deleteCluster        PASS     correct          4     6206ms
+task_030  medium      InstanceService.getByNamespace      FAIL     empty_result     4     6947ms
+task_031  medium      AppController.delete                PASS     correct          4     8267ms
+task_032  medium      NamespaceController.delete          FAIL     empty_result     4     7195ms
+task_033  medium      ConfigController.queryConfig        FAIL     wrong_line       3     6062ms
+task_034  medium      InputValidator.isValidClusterNamespace PASS  correct          3     3976ms
+task_035  medium      ApolloAuditLogService.save          PASS     correct          4     5454ms
+task_036  hard        NamespaceService.findChildNamespace PASS     correct          3     5870ms
+task_037  hard        NamespaceService.isChildNamespace   FAIL     wrong_line       3     5952ms
+task_038  hard        NamespaceService.findParentNamespace FAIL    empty_result     4     7572ms
+task_039  hard        ConfigFileController.ConfigFileOutputFormat PASS correct      3     4243ms
+task_040  hard        ReleaseController.PublishEventType  PASS     correct          3     3656ms
+task_041  hard        AdminServiceAPI.ItemAPI             PASS     correct          3     4626ms
+task_042  hard        ReleaseService.rollbackTo           PASS     correct          3     7620ms
+task_043  hard        PermissionController.hasPermission  FAIL     wrong_line       3     7667ms
+task_044  hard        ReleaseService.publish              FAIL     empty_result     4     8615ms
+task_045  hard        ItemController.get                  FAIL     api_error        0     7177ms
+task_046  edge        ChangeType                          PASS     correct          2     2563ms
+task_047  edge        OpType                              PASS     correct          3     4003ms
+task_048  edge        PreAcquireNamespaceLock             PASS     correct          3     4988ms
+task_049  edge        ApolloAuditLog                      PASS     correct          4    10287ms
+task_050  edge        ReleaseMessageListener.handleMessage FAIL    api_error        0     1331ms
+
+================================================================================
+Appendix B: Bugs Fixed During Experiment
+================================================================================
+
+B1. Windows path normalization in grep_tools.py
+    - rg_search returned raw OS paths with backslashes
+    - glob_files returned backslash-separated paths
+    - rg_search included codebases/apollo/ prefix in file paths
+    Fix: Normalize to forward slashes and strip codebase prefix
+
+B2. Markdown artifact in LLM output parsing (grep_agent.py)
+    - LLM wrapped paths in markdown: `path`, **path**, etc.
+    - _parse_answer used greedy (.+?):(\d+) which captured artifacts
+    Fix: Use restrictive regex ([\w\-./]+\.java):(\d+) + strip markdown chars
+
+    Impact: Without B2 fix, only 7/50 (14%) succeeded. With fix: 34/50 (68%).
+
+================================================================================
+End of Report
+================================================================================
