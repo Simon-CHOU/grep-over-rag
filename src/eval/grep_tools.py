@@ -16,11 +16,16 @@ def rg_search(pattern: str, codebase_root: str, file_pattern: str = "*.java") ->
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
         results = []
+        codebase_prefix = str(Path(codebase_root)).replace("\\", "/") + "/"
         for line in lines:
             parts = line.rsplit(":", 2)
             if len(parts) >= 3:
+                raw_file = parts[0].replace("\\", "/")
+                rel_file = raw_file
+                if raw_file.startswith(codebase_prefix):
+                    rel_file = raw_file[len(codebase_prefix):]
                 results.append({
-                    "file": parts[0],
+                    "file": rel_file,
                     "line": int(parts[1]),
                     "content": parts[2].strip()
                 })
@@ -33,7 +38,7 @@ def glob_files(pattern: str, codebase_root: str) -> list[str]:
     """Find files matching glob pattern relative to codebase root."""
     full_pattern = str(Path(codebase_root) / pattern)
     matches = sorted(_glob(full_pattern, recursive=True))
-    return [str(Path(m).relative_to(codebase_root)) for m in matches]
+    return [str(Path(m).relative_to(codebase_root)).replace("\\", "/") for m in matches]
 
 
 def read_file(file_path: str, start_line: int = 0, end_line: int = 0) -> str:
