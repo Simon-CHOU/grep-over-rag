@@ -1,7 +1,9 @@
+# src/eval/indexer.py
 import os
 import json
 import numpy as np
 from pathlib import Path
+from src.eval.chunker import chunk_file
 
 try:
     import faiss
@@ -11,40 +13,53 @@ except ImportError:
 
 
 class IndexBuilder:
-    """Collects Java files from codebase and builds embeddings for each."""
+    """Collects Java files from codebase, chunks them at symbol level,
+    and builds embeddings for each chunk."""
 
     def __init__(self, codebase_root: str, embedder):
         self.codebase_root = codebase_root
         self.embedder = embedder
 
     def build_chunks(self) -> list[dict]:
-        """Walk Java files, create chunks, embed them."""
-        chunks = []
+        """Walk Java files, create symbol-level chunks, embed them."""
         java_files = []
         for root, _, files in os.walk(self.codebase_root):
             for f in files:
-                if f.endswith(".java"):
+                if f.endswith(".java") and "src" in root and "main" in root and "test" not in root:
                     java_files.append(os.path.join(root, f))
 
-        texts = []
+        chunk_dicts = []
         for fpath in sorted(java_files):
             try:
                 with open(fpath, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
             except Exception:
-                content = ""
-            rel_path = os.path.relpath(fpath, self.codebase_root)
-            texts.append(content)
-            chunks.append({"file": rel_path, "content": content})
+                continue
+            rel_path = os.path.relpath(fpath, self.codebase_root).replace("\\", "/")
+            chunks = chunk_file(content, rel_path)
+            for c in chunks:
+                chunk_dicts.append({
+                    "file": c.file,
+                    "symbol": c.symbol,
+                    "symbol_type": c.symbol_type,
+                    "start_line": c.start_line,
+                    "end_line": c.end_line,
+                    "content": c.content,
+                })
 
-        if not chunks:
+        if not chunk_dicts:
             return []
 
-        embeddings = self.embedder.embed(texts)
+        # Build embedding input: symbol name + type + code preview
+        embed_texts = [
+            f"{c['symbol']} ({c['symbol_type']})\n{c['content'][:500]}"
+            for c in chunk_dicts
+        ]
+        embeddings = self.embedder.embed(embed_texts)
         for i, emb in enumerate(embeddings):
-            chunks[i]["embedding"] = emb
+            chunk_dicts[i]["embedding"] = emb
 
-        return chunks
+        return chunk_dicts
 
 
 class IndexStore:
@@ -56,7 +71,17 @@ class IndexStore:
 
     def save(self, chunks: list[dict]):
         embeddings = np.array([c["embedding"] for c in chunks], dtype="float32")
-        metadata = [{"file": c["file"], "content": c["content"][:2000]} for c in chunks]
+        metadata = [
+            {
+                "file": c["file"],
+                "symbol": c["symbol"],
+                "symbol_type": c["symbol_type"],
+                "start_line": c["start_line"],
+                "end_line": c["end_line"],
+                "content": c["content"][:2000],
+            }
+            for c in chunks
+        ]
 
         if HAS_FAISS:
             dim = embeddings.shape[1]
@@ -82,7 +107,7 @@ class IndexStore:
             return {"embeddings": embeddings, "metadata": metadata}
 
     def search(self, query_embedding: list[float], top_k: int = 5) -> list[str]:
-        """Return top-k results as formatted strings with file + snippet."""
+        """Return top-k results as formatted strings with file, symbol, and line info."""
         data = self.load()
         metadata = data["metadata"]
         q = np.array([query_embedding], dtype="float32")
@@ -95,7 +120,11 @@ class IndexStore:
                 if idx >= 0 and idx < len(metadata):
                     meta = metadata[idx]
                     results.append(
-                        f"File: {meta['file']}\nScore: {score:.4f}\n```java\n{meta['content'][:1000]}\n```"
+                        f"File: {meta['file']}\n"
+                        f"Symbol: {meta['symbol']} ({meta['symbol_type']})\n"
+                        f"Lines: {meta['start_line']}-{meta['end_line']}\n"
+                        f"Score: {score:.4f}\n"
+                        f"```java\n{meta['content'][:1000]}\n```"
                     )
             return results
         else:
@@ -107,24 +136,28 @@ class IndexStore:
                 if idx < len(metadata):
                     meta = metadata[idx]
                     results.append(
-                        f"File: {meta['file']}\nScore: {similarity[idx]:.4f}\n```java\n{meta['content'][:1000]}\n```"
+                        f"File: {meta['file']}\n"
+                        f"Symbol: {meta['symbol']} ({meta['symbol_type']})\n"
+                        f"Lines: {meta['start_line']}-{meta['end_line']}\n"
+                        f"Score: {similarity[idx]:.4f}\n"
+                        f"```java\n{meta['content'][:1000]}\n```"
                     )
             return results
 
 
 if __name__ == "__main__":
     import argparse
-    from src.eval.embedder import DeepSeekEmbedder
+    from src.eval.embedder import DashScopeEmbedder
 
     parser = argparse.ArgumentParser(description="Build RAG vector index")
     parser.add_argument("--codebase", default="codebases/apollo")
     parser.add_argument("--index-dir", default="data/index")
     args = parser.parse_args()
 
-    embedder = DeepSeekEmbedder()
+    embedder = DashScopeEmbedder()
     builder = IndexBuilder(codebase_root=args.codebase, embedder=embedder)
     chunks = builder.build_chunks()
-    print(f"Embedded {len(chunks)} files")
+    print(f"Created {len(chunks)} symbol-level chunks from Java files")
 
     store = IndexStore(args.index_dir)
     store.save(chunks)
